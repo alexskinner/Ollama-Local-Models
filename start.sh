@@ -1,21 +1,52 @@
 #!/bin/bash
 
-# Start Ollama server in the background
+# Default models if OLLAMA_MODEL is not set
+DEFAULT_MODELS="gemma3:12b mxbai-embed-large"
+
+# Use MODELS if set, else fallback to defaults
+MODELS="${MODELS:-$DEFAULT_MODELS}"
+
+# Split comma-separated list into space-separated (for looping)
+MODELS=$(echo "$MODELS" | tr ',' ' ')
+
+# Set temp OLLAMA_HOST for localhost-only server on a non-exposed port
+export OLLAMA_HOST=127.0.0.1:11435
+
+# Start temp Ollama server in the background for pulls/checks
 ollama serve &
 
-# Wait for the server to be ready (health check loop)
-until curl --fail --silent --head http://localhost:11434; do
+# Wait for the temp server to be ready (health check loop with timeout)
+for i in {1..60}; do
+    if curl --fail --silent --head http://127.0.0.1:11435; then
+        break
+    fi
     sleep 1
 done
 
-# Check if models are already present; pull if not
-if ! ollama list | grep -q "gemma3:12b"; then  
-    ollama pull gemma3:12b
+# If the loop timed out, exit with error
+if [ "$i" -eq 60 ]; then
+    echo "Error: Temp Ollama server failed to start within 60 seconds."
+    exit 1
 fi
 
-if ! ollama list | grep -q "mxbai-embed-large"; then
-    ollama pull mxbai-embed-large
-fi
+# Check/pull each model if not already present (using temp server)
+for MODEL in $MODELS; do
+    if ! ollama list | grep -q "$MODEL"; then
+        echo "Pulling $MODEL "
+        ollama pull "$MODEL"
+    else
+        echo "Model $MODEL already exists, skipping pull."
+    fi
+done
 
-# Keep the container running (wait for the background process)
-wait
+# Kill the temp server process
+pkill ollama
+
+# Unset the temp OLLAMA_HOST to default 0.0.0.0:11434 for exposure
+export OLLAMA_HOST=0.0.0.0:11434
+
+
+echo "Starting the accessible server"
+
+# Start the final Ollama server (now with models ready)
+ollama serve
